@@ -1,17 +1,19 @@
 
 import React, { useState, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, X, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, ArrowDownCircle, ArrowUpCircle, LayoutGrid } from 'lucide-react';
 import { Transaction, TransactionType } from '../types';
+import { CalendarViewType } from '../App'; // Import the shared type
 
 interface Props {
   transactions: Transaction[];
   onSelectDate: (date: string | null) => void;
   selectedDate: string | null;
+  viewType: CalendarViewType;
+  onViewTypeChange: (type: CalendarViewType) => void;
 }
 
-export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, selectedDate }) => {
+export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, selectedDate, viewType, onViewTypeChange }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewType, setViewType] = useState<TransactionType>(TransactionType.EXPENSE);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -33,9 +35,10 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
   
   // 1. Calculate Daily Stats & Find Max Values for Heatmap
   const { dailyStats, maxValues } = useMemo(() => {
-    const stats: Record<string, { income: number; expense: number }> = {};
+    const stats: Record<string, { income: number; expense: number; balance: number }> = {};
     let maxInc = 0;
     let maxExp = 0;
+    let maxBal = 0; // Max Absolute Balance
     
     transactions.forEach(t => {
       const tDate = new Date(t.date);
@@ -43,13 +46,15 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
       if (tDate.getFullYear() === year && tDate.getMonth() === month) {
         const dayStr = tDate.getDate().toString();
         if (!stats[dayStr]) {
-          stats[dayStr] = { income: 0, expense: 0 };
+          stats[dayStr] = { income: 0, expense: 0, balance: 0 };
         }
         if (t.type === TransactionType.INCOME) {
           stats[dayStr].income += t.amount;
         } else {
           stats[dayStr].expense += t.amount;
         }
+        // Recalculate balance for this day
+        stats[dayStr].balance = stats[dayStr].income - stats[dayStr].expense;
       }
     });
 
@@ -57,9 +62,11 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
     Object.values(stats).forEach(val => {
       if (val.income > maxInc) maxInc = val.income;
       if (val.expense > maxExp) maxExp = val.expense;
+      const absBal = Math.abs(val.balance);
+      if (absBal > maxBal) maxBal = absBal;
     });
 
-    return { dailyStats: stats, maxValues: { income: maxInc, expense: maxExp } };
+    return { dailyStats: stats, maxValues: { income: maxInc, expense: maxExp, balance: maxBal } };
   }, [transactions, year, month]);
 
   const handlePrevMonth = () => {
@@ -80,29 +87,43 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
   };
 
   // Helper: Get Heatmap Color Class based on amount ratio
-  const getHeatmapClass = (amount: number, max: number, type: TransactionType) => {
-    if (amount === 0 || max === 0) return 'bg-white text-gray-700';
+  const getHeatmapClass = (val: number, max: number, type: CalendarViewType) => {
+    if (val === 0 || max === 0) return 'bg-white text-gray-700';
     
-    const ratio = amount / max;
+    const ratio = Math.abs(val) / max;
 
     if (type === TransactionType.EXPENSE) {
+      // Red Scale
       if (ratio < 0.15) return 'bg-red-50 text-gray-700';
       if (ratio < 0.35) return 'bg-red-100 text-red-900';
       if (ratio < 0.60) return 'bg-red-200 text-red-900';
       if (ratio < 0.85) return 'bg-red-300 text-white';
       return 'bg-red-400 text-white font-medium shadow-sm';
-    } else {
+    } else if (type === TransactionType.INCOME) {
+      // Green Scale
       if (ratio < 0.15) return 'bg-green-50 text-gray-700';
       if (ratio < 0.35) return 'bg-green-100 text-green-900';
       if (ratio < 0.60) return 'bg-green-200 text-green-900';
       if (ratio < 0.85) return 'bg-green-300 text-white';
       return 'bg-green-400 text-white font-medium shadow-sm';
+    } else {
+      // ALL Mode (Balance)
+      if (val > 0) {
+        // Positive (Green)
+        if (ratio < 0.3) return 'bg-emerald-50 text-emerald-800';
+        if (ratio < 0.6) return 'bg-emerald-100 text-emerald-900';
+        return 'bg-emerald-400 text-white font-medium shadow-sm';
+      } else {
+        // Negative (Red)
+        if (ratio < 0.3) return 'bg-rose-50 text-rose-800';
+        if (ratio < 0.6) return 'bg-rose-100 text-rose-900';
+        return 'bg-rose-400 text-white font-medium shadow-sm';
+      }
     }
   };
 
   // Generate grid cells
   const renderCalendar = () => {
-    const totalSlots = startDay + daysInMonth;
     const grid = [];
 
     // Week Headers
@@ -120,21 +141,33 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
       const isToday = new Date().toDateString() === new Date(year, month, day).toDateString();
       
       const stat = dailyStats[day.toString()];
-      const currentAmount = stat ? (viewType === TransactionType.EXPENSE ? stat.expense : stat.income) : 0;
-      const maxAmount = viewType === TransactionType.EXPENSE ? maxValues.expense : maxValues.income;
+      
+      let displayValue = 0;
+      let maxReference = 0;
+
+      if (viewType === 'all') {
+        displayValue = stat ? stat.balance : 0;
+        maxReference = maxValues.balance;
+      } else if (viewType === TransactionType.EXPENSE) {
+        displayValue = stat ? stat.expense : 0;
+        maxReference = maxValues.expense;
+      } else {
+        displayValue = stat ? stat.income : 0;
+        maxReference = maxValues.income;
+      }
       
       // Determine background style
-      let cellClass = getHeatmapClass(currentAmount, maxAmount, viewType);
+      let cellClass = getHeatmapClass(displayValue, maxReference, viewType);
       
       // Override if selected (Strong Highlight)
       if (isSelected) {
         cellClass = 'bg-gray-900 text-white shadow-md scale-105 z-10 border-gray-900';
-      } else if (isToday && currentAmount === 0) {
+      } else if (isToday && Math.abs(displayValue) < 0.01) {
         // Today but no data
         cellClass = 'bg-indigo-50 text-indigo-600 border-indigo-200 border';
       } else {
         // Add subtle border to non-empty heatmap cells
-        if (currentAmount > 0) cellClass += ' border-transparent';
+        if (Math.abs(displayValue) > 0.01) cellClass += ' border-transparent';
         else cellClass += ' border-gray-50';
       }
 
@@ -146,9 +179,9 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
         >
           <span className="text-[10px] absolute top-1 left-1 opacity-70 leading-none">{day}</span>
           
-          {currentAmount > 0 && (
+          {Math.abs(displayValue) > 0 && (
             <span className="text-xs font-bold mt-1.5">
-               {Math.round(currentAmount)}
+               {Math.round(Math.abs(displayValue))}
             </span>
           )}
         </div>
@@ -175,7 +208,17 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
           {/* Type Toggle */}
           <div className="flex bg-gray-100 p-1 rounded-xl">
              <button
-               onClick={() => setViewType(TransactionType.EXPENSE)}
+               onClick={() => onViewTypeChange('all')}
+               className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                 viewType === 'all' 
+                   ? 'bg-white text-indigo-600 shadow-sm' 
+                   : 'text-gray-400 hover:text-gray-600'
+               }`}
+             >
+               <LayoutGrid size={14} /> 收支总览
+             </button>
+             <button
+               onClick={() => onViewTypeChange(TransactionType.EXPENSE)}
                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
                  viewType === TransactionType.EXPENSE 
                    ? 'bg-white text-red-500 shadow-sm' 
@@ -185,7 +228,7 @@ export const CalendarView: React.FC<Props> = ({ transactions, onSelectDate, sele
                <ArrowUpCircle size={14} /> 支出日历
              </button>
              <button
-               onClick={() => setViewType(TransactionType.INCOME)}
+               onClick={() => onViewTypeChange(TransactionType.INCOME)}
                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
                  viewType === TransactionType.INCOME 
                    ? 'bg-white text-green-500 shadow-sm' 

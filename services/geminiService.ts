@@ -87,7 +87,7 @@ export const parseTransactionFromText = async (text: string): Promise<AIResponse
           "type": "expense" | "income",
           "category": "必须是以下之一: ${Object.values(Category).join(', ')}",
           "note": "简短备注",
-          "date": "YYYY-MM-DD (基于当前日期推算，未提及则为null)"
+          "date": "YYYY-MM-DD (基于当前日期推算，未提及则为当前时间)"
         }
       }
 

@@ -20,16 +20,34 @@ const STEPS = [
     position: 'bottom'
   },
   {
-    targetId: 'tour-settings',
-    title: '全新设置菜单',
-    description: '点击这里打开设置菜单。您可以在此配置 AI 参数、管理自定义分类，或调整您的月度预算限额。',
-    position: 'bottom'
-  },
-  {
     targetId: 'tour-add-btn',
     title: '手动记账 & 模板',
-    description: '经典的记账方式。支持极速数字键盘，且支持将常记的账单存为“快捷模板”，下次一键点击即可完成记账。',
+    description: '点击“+”号开始记账。支持极速数字键盘，您还可以将常记的账单存为“快捷模板”，下次一键点击即可完成。',
     position: 'top'
+  },
+  {
+    targetId: 'nav-calendar',
+    title: '日历视图',
+    description: '点击此处切换。以日历形式回顾历史收支，配合“热力图”色彩深浅，一眼看清哪天消费最高。',
+    position: 'top'
+  },
+  {
+    targetId: 'nav-habits',
+    title: '习惯养成',
+    description: '不仅仅是记账。在这里设定喝水、运动、背单词等日常目标，每天坚持打卡，见证更好的自己。',
+    position: 'top'
+  },
+  {
+    targetId: 'nav-stats',
+    title: '数据报表',
+    description: '钱都去哪了？通过饼图和趋势柱状图，全方位分析您的消费结构和财务健康度，支持月度和年度切换。',
+    position: 'top'
+  },
+  {
+    targetId: 'tour-settings',
+    title: '更多设置',
+    description: '点击这里配置 AI 参数、管理自定义分类，或调整您的月度预算限额。',
+    position: 'bottom'
   }
 ];
 

@@ -1,5 +1,5 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useLayoutEffect } from 'react';
 import { Transaction, TransactionType, Category } from '../types';
 import { CATEGORY_COLORS, CATEGORY_ICONS } from '../constants';
 import { 
@@ -18,6 +18,9 @@ type TimeRange = 'month' | 'year';
 export const StatsView: React.FC<Props> = ({ transactions, totalBalance }) => {
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
   const [selectedPeriod, setSelectedPeriod] = useState<string>('');
+  
+  // Ref for the scrollable chart container
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 1. Helper: 获取所有可用的月份或年份
   const availablePeriods = useMemo(() => {
@@ -98,20 +101,39 @@ export const StatsView: React.FC<Props> = ({ transactions, totalBalance }) => {
   // 5. Prepare Bar Chart Data (Trend)
   const trendData = useMemo(() => {
     const dataMap = new Map<string, { name: string, income: number, expense: number }>();
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
+    const currentDay = now.getDate();
     
     // Initialize structure based on range
     if (timeRange === 'month') {
       // Create days for the selected month
       if (selectedPeriod) {
         const [year, month] = selectedPeriod.split('-').map(Number);
-        const daysInMonth = new Date(year, month, 0).getDate();
-        for (let i = 1; i <= daysInMonth; i++) {
+        
+        let daysLimit = new Date(year, month, 0).getDate();
+        
+        // 如果是当前月份，只显示到今天
+        if (year === currentYear && month === currentMonth) {
+            daysLimit = currentDay;
+        }
+        
+        for (let i = 1; i <= daysLimit; i++) {
           dataMap.set(String(i), { name: `${i}日`, income: 0, expense: 0 });
         }
       }
     } else {
-      // Create 12 months
-      for (let i = 1; i <= 12; i++) {
+      // Create months
+      let monthsLimit = 12;
+      const selectedYear = Number(selectedPeriod);
+      
+      // 如果是当前年份，只显示到当前月份
+      if (selectedYear === currentYear) {
+          monthsLimit = currentMonth;
+      }
+      
+      for (let i = 1; i <= monthsLimit; i++) {
         dataMap.set(String(i), { name: `${i}月`, income: 0, expense: 0 });
       }
     }
@@ -133,6 +155,18 @@ export const StatsView: React.FC<Props> = ({ transactions, totalBalance }) => {
 
     return Array.from(dataMap.values());
   }, [filteredTransactions, timeRange, selectedPeriod]);
+
+  // 6. Auto-scroll to the end (latest date) when data changes
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollLeft = scrollContainerRef.current.scrollWidth;
+    }
+  }, [trendData, timeRange, selectedPeriod]);
+
+  // Chart Width Calculation
+  // 60px per item ensures about 5-6 items visible on a typical mobile screen (360-390px width)
+  const CHART_ITEM_WIDTH = 60; 
+  const chartWidth = Math.max(trendData.length * CHART_ITEM_WIDTH, 350); // Minimum width to prevent squeeze
 
   return (
     <div className="pb-24">
@@ -230,26 +264,44 @@ export const StatsView: React.FC<Props> = ({ transactions, totalBalance }) => {
 
           {filteredTransactions.length > 0 ? (
             <>
-              {/* Trend Chart */}
-              <div className="px-4 mb-6">
-                <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-                  <Calendar size={18} className="text-indigo-600" />
-                  收支趋势
-                </h3>
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={trendData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                      <XAxis dataKey="name" tick={{fontSize: 10}} tickLine={false} axisLine={false} />
-                      <YAxis tick={{fontSize: 10}} tickLine={false} axisLine={false} />
-                      <RechartsTooltip 
-                        cursor={{fill: '#f3f4f6'}}
-                        contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
-                      />
-                      <Bar dataKey="income" name="收入" fill="#4ade80" radius={[4, 4, 0, 0]} stackId="a" />
-                      <Bar dataKey="expense" name="支出" fill="#f87171" radius={[4, 4, 0, 0]} stackId="a" />
-                    </BarChart>
-                  </ResponsiveContainer>
+              {/* Trend Chart (Horizontal Scroll) */}
+              <div className="mb-6">
+                <div className="px-4 mb-3 flex items-center justify-between">
+                   <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <Calendar size={18} className="text-indigo-600" />
+                    收支趋势
+                   </h3>
+                   <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-1 rounded-md">
+                     左右滑动查看更多
+                   </span>
+                </div>
+                
+                <div 
+                  ref={scrollContainerRef}
+                  className="overflow-x-auto no-scrollbar pb-2 pl-4 pr-4"
+                  style={{ scrollBehavior: 'smooth' }}
+                >
+                  <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 h-64" style={{ width: chartWidth }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }} barCategoryGap="20%">
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                        <XAxis 
+                          dataKey="name" 
+                          tick={{fontSize: 10}} 
+                          tickLine={false} 
+                          axisLine={false} 
+                          interval={0} // Force show all labels since we have enough scrolling width
+                        />
+                        <YAxis tick={{fontSize: 10}} tickLine={false} axisLine={false} />
+                        <RechartsTooltip 
+                          cursor={{fill: '#f3f4f6', radius: 4}}
+                          contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px -2px rgb(0 0 0 / 0.1)'}}
+                        />
+                        <Bar dataKey="income" name="收入" fill="#4ade80" radius={[4, 4, 0, 0]} stackId="a" maxBarSize={40} />
+                        <Bar dataKey="expense" name="支出" fill="#f87171" radius={[4, 4, 0, 0]} stackId="a" maxBarSize={40} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
 

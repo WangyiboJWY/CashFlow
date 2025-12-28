@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, PieChart, Home, Settings, X, Calendar, Wallet, Save, Upload, FileText, Database, Search, KeyRound, CheckCircle2, AlertCircle, Loader2, Cloud, ShieldCheck, Bookmark, Trash2, Zap, Keyboard, List, ChevronRight, ArrowLeft, CalendarDays, Coins, Layers, Smartphone, Bot } from 'lucide-react';
-import { Transaction, TransactionType, TransactionTemplate, CustomCategoryMap, CustomMainCategoryMap } from './types';
+import { Plus, PieChart, Home, Settings, X, Calendar, Wallet, Save, Upload, FileText, Database, Search, KeyRound, CheckCircle2, AlertCircle, Loader2, Cloud, ShieldCheck, Bookmark, Trash2, Zap, Keyboard, List, ChevronRight, ArrowLeft, CalendarDays, Coins, Layers, Smartphone, Bot, Copy, Activity, ArrowDownCircle, ArrowUpCircle, LayoutGrid } from 'lucide-react';
+import { Transaction, TransactionType, TransactionTemplate, CustomCategoryMap, CustomMainCategoryMap, Habit } from './types';
 import { 
   getTransactions, 
   saveTransaction, 
@@ -9,6 +9,7 @@ import {
   calculateSummary, 
   exportToCSV, 
   exportBackup,
+  copyBackupToClipboard,
   overwriteTransactions,
   importBackup,
   getTemplates,
@@ -19,7 +20,11 @@ import {
   getCustomMainCategories,
   saveCustomMainCategories,
   getBudgetLimit,
-  saveBudgetLimit
+  saveBudgetLimit,
+  getHabits,
+  saveHabit,
+  deleteHabit,
+  logHabitAction
 } from './services/storageService';
 import { getStoredApiKey, setStoredApiKey, testConnection, isApiReady } from './services/geminiService';
 import { TransactionItem } from './components/TransactionItem';
@@ -29,10 +34,16 @@ import { MagicInput } from './components/MagicInput';
 import { NumPad } from './components/NumPad'; 
 import { OnboardingTutorial } from './components/OnboardingTutorial';
 import { CalendarView } from './components/CalendarView';
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS, APP_STORAGE_KEY, MAX_SUB_CATEGORIES_PER_MAIN, MAX_TOTAL_CUSTOM_CATEGORIES, MAX_CUSTOM_MAIN_CATEGORIES, APP_ONBOARDING_KEY } from './constants';
+import { HabitItem } from './components/HabitItem';
+import { HabitFormModal } from './components/HabitFormModal';
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS, APP_STORAGE_KEY, MAX_SUB_CATEGORIES_PER_MAIN, MAX_TOTAL_CUSTOM_CATEGORIES, MAX_CUSTOM_MAIN_CATEGORIES, APP_ONBOARDING_KEY, APP_HABITS_KEY } from './constants';
 import { Capacitor } from '@capacitor/core';
 
-type Tab = 'home' | 'stats';
+type Tab = 'home' | 'calendar' | 'habits' | 'stats';
+type FilterType = 'all' | TransactionType;
+// Extend Calendar View Type to include 'all'
+export type CalendarViewType = 'all' | TransactionType;
+
 const STORAGE_KEY_FORM_DRAFT = 'cashflow_form_draft';
 
 const getLocalToday = () => {
@@ -47,6 +58,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [templates, setTemplates] = useState<TransactionTemplate[]>([]);
+  
+  // Habits Data
+  const [habits, setHabits] = useState<Habit[]>([]);
   
   // Categories Data
   const [customCategories, setCustomCategories] = useState<CustomCategoryMap>({});
@@ -68,11 +82,18 @@ export default function App() {
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);           // Sub Modal: AI
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false); // Sub Modal: Categories
 
+  // Habit Modal State
+  const [isHabitModalOpen, setIsHabitModalOpen] = useState(false);
+  const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
+
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   
+  // Home Tab Filter State
+  const [homeFilterType, setHomeFilterType] = useState<FilterType>('all');
+
   // Calendar State
-  const [showCalendar, setShowCalendar] = useState(false);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+  const [calendarViewType, setCalendarViewType] = useState<CalendarViewType>(TransactionType.EXPENSE);
 
   // Onboarding State
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -142,7 +163,10 @@ export default function App() {
     // 6. Load Budget
     setBudgetLimit(getBudgetLimit());
 
-    // 7. Load Draft
+    // 7. Load Habits
+    setHabits(getHabits());
+
+    // 8. Load Draft
     const savedForm = localStorage.getItem(STORAGE_KEY_FORM_DRAFT);
     if (savedForm) {
       try {
@@ -167,15 +191,16 @@ export default function App() {
 
   const summary = calculateSummary(transactions);
 
-  const filteredTransactions = useMemo(() => {
+  // Home Tab: Filter by Search Query AND Filter Type
+  const homeTransactions = useMemo(() => {
     let result = transactions;
-
-    // 1. Calendar Filter (Priority)
-    if (selectedCalendarDate) {
-      result = result.filter(t => t.date.startsWith(selectedCalendarDate));
+    
+    // 1. Type Filter
+    if (homeFilterType !== 'all') {
+      result = result.filter(t => t.type === homeFilterType);
     }
 
-    // 2. Search Filter
+    // 2. Search Query
     const query = searchQuery.toLowerCase().trim();
     if (query) {
       result = result.filter(t => {
@@ -186,9 +211,21 @@ export default function App() {
         return matchNote || matchCategory || matchAmount || matchDate;
       });
     }
-
     return result;
-  }, [transactions, searchQuery, selectedCalendarDate]);
+  }, [transactions, searchQuery, homeFilterType]);
+
+  // Calendar Tab: Filter by Selected Date AND View Type
+  const calendarTransactions = useMemo(() => {
+    if (!selectedCalendarDate) return [];
+    
+    let dailyTx = transactions.filter(t => t.date.startsWith(selectedCalendarDate));
+    
+    if (calendarViewType !== 'all') {
+      dailyTx = dailyTx.filter(t => t.type === calendarViewType);
+    }
+    
+    return dailyTx;
+  }, [transactions, selectedCalendarDate, calendarViewType]);
 
   // Compute available main categories (Merged Default + Custom)
   const getAvailableMainCategories = (t: TransactionType) => {
@@ -319,7 +356,7 @@ export default function App() {
 
   const handleManagerAddSubCategory = (mainCat: string) => {
     let totalCustom = 0;
-    Object.values(customCategories).forEach(arr => totalCustom += arr.length);
+    Object.values(customCategories).forEach((arr: string[]) => totalCustom += arr.length);
     if (totalCustom >= MAX_TOTAL_CUSTOM_CATEGORIES) {
       alert(`自定义子分类总数已达上限 (${MAX_TOTAL_CUSTOM_CATEGORIES}个)`);
       return;
@@ -362,6 +399,41 @@ export default function App() {
          setCategory(mainCat);
        }
     }
+  };
+
+  // ---------------------------------
+  // --- Habit Handlers ---
+
+  const handleSaveHabit = (habit: Habit) => {
+    const updated = saveHabit(habit);
+    setHabits(updated);
+    setIsHabitModalOpen(false);
+  };
+
+  const handleDeleteHabit = (id: string) => {
+    const updated = deleteHabit(id);
+    setHabits(updated);
+    setIsHabitModalOpen(false);
+  };
+
+  const handleHabitIncrement = (id: string) => {
+    const updated = logHabitAction(id, 'increment');
+    setHabits(updated);
+  };
+
+  const handleHabitDecrement = (id: string) => {
+    const updated = logHabitAction(id, 'decrement');
+    setHabits(updated);
+  };
+
+  const openHabitCreate = () => {
+    setEditingHabit(null);
+    setIsHabitModalOpen(true);
+  };
+
+  const openHabitEdit = (habit: Habit) => {
+    setEditingHabit(habit);
+    setIsHabitModalOpen(true);
   };
 
   // ---------------------------------
@@ -536,15 +608,19 @@ export default function App() {
   const handleSaveGame = async () => {
     try {
       const fileName = await exportBackup(transactions);
-      if (Capacitor.isNativePlatform()) {
-        // Native shows a share dialog, no need for specific folder path alert
-        // The toast/alert is handled after share, or just implicit
-      } else {
-        alert(`备份导出成功！✅\n\n📂 保存位置：手机内部存储 > Download 文件夹\n📄 文件名：${fileName}\n\n请妥善保管此文件。`);
-      }
+      // Native behavior handled inside exportBackup (Share Dialog)
     } catch (e) {
       alert("导出失败");
     }
+  };
+  
+  const handleCopyBackup = async () => {
+     try {
+       await copyBackupToClipboard(transactions);
+       alert("备份内容已复制到剪贴板！📋\n\n您可以将其粘贴到微信、备忘录或邮件中发送给自己。");
+     } catch (e) {
+       alert("复制失败，请重试");
+     }
   };
 
   const handleLoadGameClick = () => {
@@ -579,6 +655,12 @@ export default function App() {
          saveBudgetLimit(data.budget);
       }
 
+      // Load Habits
+      if (data.habits) {
+        setHabits(data.habits);
+        localStorage.setItem(APP_HABITS_KEY, JSON.stringify(data.habits));
+      }
+
       alert("数据恢复成功！");
       setIsDataMenuOpen(false);
     } catch (error) {
@@ -591,12 +673,8 @@ export default function App() {
 
   const handleExportCSV = async () => {
     try {
-      const fileName = await exportToCSV(transactions);
-      if (Capacitor.isNativePlatform()) {
-        // Native
-      } else {
-        alert(`报表导出成功！✅\n\n📂 保存位置：手机内部存储 > Download 文件夹\n📄 文件名：${fileName}\n\n您可以使用 Excel 或 WPS 打开查看。`);
-      }
+      await exportToCSV(transactions);
+      // Native behavior handled inside exportToCSV
     } catch(e) {
       alert("导出失败");
     }
@@ -759,35 +837,35 @@ export default function App() {
                     />
                   </div>
                   
-                  {/* Header Row: Recent Details + Calendar Toggle */}
+                  {/* Header Row: Recent Details + Type Filters */}
                   <div className="flex justify-between items-center mb-4 mt-6">
                     <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                      <Calendar size={18} className="text-indigo-600"/>
+                      <List size={18} className="text-indigo-600"/>
                       近期明细
                     </h3>
-                    <button 
-                      onClick={() => {
-                        // Closing calendar: clear date filter to show all recent
-                        if (showCalendar) {
-                          setSelectedCalendarDate(null);
-                        }
-                        setShowCalendar(!showCalendar);
-                      }}
-                      className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${showCalendar ? 'bg-indigo-100 text-indigo-700' : 'bg-white text-gray-500 hover:bg-gray-50 border border-gray-100'}`}
-                    >
-                      <CalendarDays size={14} />
-                      {showCalendar ? '收起日历' : '日历视图'}
-                    </button>
+                    
+                    {/* Home Filters */}
+                    <div className="flex bg-gray-100 rounded-lg p-0.5">
+                       <button
+                         onClick={() => setHomeFilterType('all')}
+                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${homeFilterType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}
+                       >
+                         全部
+                       </button>
+                       <button
+                         onClick={() => setHomeFilterType(TransactionType.EXPENSE)}
+                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${homeFilterType === TransactionType.EXPENSE ? 'bg-white text-red-500 shadow-sm' : 'text-gray-400'}`}
+                       >
+                         支出
+                       </button>
+                       <button
+                         onClick={() => setHomeFilterType(TransactionType.INCOME)}
+                         className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${homeFilterType === TransactionType.INCOME ? 'bg-white text-green-500 shadow-sm' : 'text-gray-400'}`}
+                       >
+                         收入
+                       </button>
+                    </div>
                   </div>
-
-                  {/* Calendar View */}
-                  {showCalendar && (
-                    <CalendarView 
-                       transactions={transactions} 
-                       onSelectDate={(date) => setSelectedCalendarDate(date)}
-                       selectedDate={selectedCalendarDate}
-                    />
-                  )}
                 </div>
               </>
             ) : (
@@ -795,28 +873,26 @@ export default function App() {
                  <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
                       <Search size={18} className="text-indigo-600"/>
-                      搜索结果 ({filteredTransactions.length})
+                      搜索结果 ({homeTransactions.length})
                     </h3>
                  </div>
               </div>
             )}
 
             <div className="px-4">
-              {filteredTransactions.length === 0 ? (
+              {homeTransactions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-gray-400 opacity-60">
                   <Wallet size={64} className="mb-4 text-gray-200" />
                   <p>
                     {searchQuery 
                        ? "未找到相关记录" 
-                       : selectedCalendarDate 
-                         ? "该日期暂无记账" 
-                         : "暂无数据，点击 \"+\" 开始记账"
+                       : "暂无数据，点击 \"+\" 开始记账"
                     }
                   </p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {(searchQuery ? filteredTransactions : filteredTransactions.slice(0, 50)).map(tx => (
+                  {(searchQuery ? homeTransactions : homeTransactions.slice(0, 50)).map(tx => (
                     <TransactionItem 
                       key={tx.id} 
                       transaction={tx} 
@@ -828,6 +904,98 @@ export default function App() {
               )}
             </div>
           </>
+        )}
+
+        {/* --- CALENDAR TAB CONTENT --- */}
+        {activeTab === 'calendar' && (
+           <div className="pt-6 px-4 pb-24">
+              <div className="mb-4">
+                <h2 className="text-2xl font-bold text-gray-900">日历视图</h2>
+                <p className="text-gray-500 text-sm">按日期查看您的收支概况</p>
+              </div>
+              <CalendarView 
+                 transactions={transactions}
+                 onSelectDate={setSelectedCalendarDate}
+                 selectedDate={selectedCalendarDate}
+                 viewType={calendarViewType}
+                 onViewTypeChange={setCalendarViewType}
+              />
+              <div className="space-y-3 mt-4">
+                 {selectedCalendarDate ? (
+                    <>
+                      <h3 className="font-bold text-gray-800 text-sm mb-2 flex items-center gap-2">
+                        <span className="w-1.5 h-4 bg-indigo-600 rounded-full"></span>
+                        {selectedCalendarDate} 的记录
+                        <span className="ml-auto text-[10px] font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+                           {calendarViewType === 'all' ? '全部记录' : (calendarViewType === TransactionType.EXPENSE ? '仅支出' : '仅收入')}
+                        </span>
+                      </h3>
+                      {calendarTransactions.length > 0 ? (
+                         calendarTransactions.map(tx => (
+                           <TransactionItem 
+                             key={tx.id} 
+                             transaction={tx} 
+                             onDelete={handleDelete} 
+                             onClick={(t) => setSelectedTransaction(t)}
+                           />
+                         ))
+                      ) : (
+                         <div className="text-center py-8 text-gray-400 text-sm">
+                           该日无{calendarViewType === TransactionType.EXPENSE ? '支出' : calendarViewType === TransactionType.INCOME ? '收入' : ''}记录
+                         </div>
+                      )}
+                    </>
+                 ) : (
+                    <div className="text-center py-12 text-gray-400 text-sm bg-white rounded-xl border border-dashed border-gray-200 flex flex-col items-center justify-center gap-2">
+                       <Calendar size={24} className="opacity-50" />
+                       <p>点击日历上的日期查看详情</p>
+                    </div>
+                 )}
+              </div>
+           </div>
+        )}
+
+        {/* --- HABITS TAB CONTENT --- */}
+        {activeTab === 'habits' && (
+           <div className="pt-6 px-4">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">习惯打卡</h2>
+                  <p className="text-gray-500 text-sm">坚持每一天，见证改变</p>
+                </div>
+                <button 
+                  onClick={openHabitCreate}
+                  className="bg-gray-900 text-white p-2 rounded-xl shadow-md hover:bg-black transition-colors"
+                >
+                  <Plus size={24} />
+                </button>
+              </div>
+
+              {habits.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                   <Activity size={48} className="mb-4 opacity-50" />
+                   <p className="mb-4">暂无习惯，创建一个吧！</p>
+                   <button 
+                     onClick={openHabitCreate}
+                     className="px-6 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-full text-sm hover:bg-indigo-100 transition-colors"
+                   >
+                     新建习惯
+                   </button>
+                </div>
+              ) : (
+                <div className="space-y-3 pb-24">
+                   {habits.map(habit => (
+                      <HabitItem 
+                        key={habit.id} 
+                        habit={habit}
+                        onIncrement={handleHabitIncrement}
+                        onDecrement={handleHabitDecrement}
+                        onEdit={openHabitEdit}
+                      />
+                   ))}
+                </div>
+              )}
+           </div>
         )}
 
         {/* ... (Stats Tab content unchanged) ... */}
@@ -843,15 +1011,25 @@ export default function App() {
         )}
       </div>
       
-      {/* ... (Bottom Navigation and Modals remain unchanged) ... */}
+      {/* ... (Bottom Navigation) ... */}
 
       <div className="fixed bottom-0 w-full max-w-md bg-white border-t border-gray-100 px-6 py-3 flex justify-between items-center z-30 pb-safe">
         <button 
+          id="nav-home"
           onClick={() => setActiveTab('home')}
           className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' ? 'text-indigo-600' : 'text-gray-400'}`}
         >
           <Home size={24} strokeWidth={activeTab === 'home' ? 2.5 : 2} />
           <span className="text-[10px] font-medium">明细</span>
+        </button>
+
+        <button 
+          id="nav-calendar"
+          onClick={() => setActiveTab('calendar')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'calendar' ? 'text-indigo-600' : 'text-gray-400'}`}
+        >
+          <CalendarDays size={24} strokeWidth={activeTab === 'calendar' ? 2.5 : 2} />
+          <span className="text-[10px] font-medium">日历</span>
         </button>
 
         <div className="relative -top-8">
@@ -866,6 +1044,16 @@ export default function App() {
         </div>
 
         <button 
+          id="nav-habits"
+          onClick={() => setActiveTab('habits')}
+          className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'habits' ? 'text-indigo-600' : 'text-gray-400'}`}
+        >
+          <Activity size={24} strokeWidth={activeTab === 'habits' ? 2.5 : 2} />
+          <span className="text-[10px] font-medium">习惯</span>
+        </button>
+
+        <button 
+          id="nav-stats"
           onClick={() => setActiveTab('stats')}
           className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'stats' ? 'text-indigo-600' : 'text-gray-400'}`}
         >
@@ -1082,6 +1270,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* --- HABIT FORM MODAL --- */}
+      <HabitFormModal
+         isOpen={isHabitModalOpen}
+         onClose={() => setIsHabitModalOpen(false)}
+         onSave={handleSaveHabit}
+         onDelete={handleDeleteHabit}
+         habit={editingHabit}
+      />
 
       {/* --- NEW: MAIN SETTINGS MENU MODAL --- */}
       {isSettingsMenuOpen && (
@@ -1456,6 +1653,20 @@ export default function App() {
                  <div>
                    <h3 className="font-bold text-gray-800">导出备份 (Export)</h3>
                    <p className="text-xs text-gray-500">将所有数据保存为 JSON 文件</p>
+                 </div>
+               </button>
+               
+               {/* NEW COPY BUTTON */}
+               <button 
+                 onClick={handleCopyBackup}
+                 className="w-full flex items-center gap-4 p-4 rounded-xl border border-gray-100 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-200 transition-all group text-left"
+               >
+                 <div className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-indigo-500 group-hover:scale-110 transition-transform">
+                   <Copy size={20} />
+                 </div>
+                 <div>
+                   <h3 className="font-bold text-gray-800">复制备份内容</h3>
+                   <p className="text-xs text-gray-500">备选方案：复制到剪贴板，手动粘贴发送</p>
                  </div>
                </button>
 

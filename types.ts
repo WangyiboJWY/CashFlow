@@ -50,3 +50,21 @@ export interface ChartDataPoint {
 export type CustomCategoryMap = Record<string, string[]>; // Main -> Sub[]
 
 export type CustomMainCategoryMap = Record<TransactionType, string[]>; // Type -> Main[]
+
+// --- Habit Types ---
+
+export type HabitPeriod = 'daily' | 'weekly' | 'monthly' | 'custom';
+
+export interface Habit {
+  id: string;
+  name: string;
+  icon: string; // Key for icon map
+  color: string;
+  targetCount: number; // e.g. 8 glasses of water
+  period: HabitPeriod;
+  customInterval?: number; // In days, used when period is 'custom'
+  allowExceed?: boolean; // If true, can log more than target count
+  logs: number[]; // Array of timestamps (ms) when action occurred
+  createdAt: number;
+  archived?: boolean; // Soft delete
+}
