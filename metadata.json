@@ -1,0 +1,5 @@
+{
+  "name": "CashFlow - 智能记账",
+  "description": "一款基于React和DeepSeek V3 AI的个人记账应用，支持自然语言极速记账、数据可视化分析及CSV导出，专为移动端体验打造。",
+  "requestFramePermissions": []
+}
